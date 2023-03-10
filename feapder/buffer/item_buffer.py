@@ -8,12 +8,11 @@ Created on 2018-06-19 17:17
 @email: boris_liu@foxmail.com
 """
 
-import importlib
 import threading
 from queue import Queue
 
-import feapder.setting as setting
 import feapder.utils.tools as tools
+from feapder import setting
 from feapder.db.redisdb import RedisDB
 from feapder.dedup import Dedup
 from feapder.network.item import Item, UpdateItem
@@ -21,9 +20,6 @@ from feapder.pipelines import BasePipeline
 from feapder.pipelines.mysql_pipeline import MysqlPipeline
 from feapder.utils import metrics
 from feapder.utils.log import log
-
-MAX_ITEM_COUNT = 5000  # 缓存中最大item数
-UPLOAD_BATCH_MAX_SIZE = 1000
 
 MYSQL_PIPELINE_PATH = "feapder.pipelines.mysql_pipeline.MysqlPipeline"
 
@@ -41,9 +37,9 @@ class ItemBuffer(threading.Thread):
             self._redis_key = redis_key
             self._task_table = task_table
 
-            self._items_queue = Queue(maxsize=MAX_ITEM_COUNT)
+            self._items_queue = Queue(maxsize=setting.ITEM_MAX_CACHED_COUNT)
 
-            self._table_request = setting.TAB_REQUSETS.format(redis_key=redis_key)
+            self._table_request = setting.TAB_REQUESTS.format(redis_key=redis_key)
             self._table_failed_items = setting.TAB_FAILED_ITEMS.format(
                 redis_key=redis_key
             )
@@ -81,9 +77,7 @@ class ItemBuffer(threading.Thread):
     def load_pipelines(self):
         pipelines = []
         for pipeline_path in setting.ITEM_PIPELINES:
-            module, class_name = pipeline_path.rsplit(".", 1)
-            pipeline_cls = importlib.import_module(module).__getattribute__(class_name)
-            pipeline = pipeline_cls()
+            pipeline = tools.import_cls(pipeline_path)()
             if not isinstance(pipeline, BasePipeline):
                 raise ValueError(f"{pipeline_path} 需继承 feapder.pipelines.BasePipeline")
             pipelines.append(pipeline)
@@ -93,9 +87,7 @@ class ItemBuffer(threading.Thread):
     @property
     def mysql_pipeline(self):
         if not self._mysql_pipeline:
-            module, class_name = MYSQL_PIPELINE_PATH.rsplit(".", 1)
-            pipeline_cls = importlib.import_module(module).__getattribute__(class_name)
-            self._mysql_pipeline = pipeline_cls()
+            self._mysql_pipeline = tools.import_cls(MYSQL_PIPELINE_PATH)()
 
         return self._mysql_pipeline
 
@@ -103,7 +95,7 @@ class ItemBuffer(threading.Thread):
         self._thread_stop = False
         while not self._thread_stop:
             self.flush()
-            tools.delay_time(1)
+            tools.delay_time(setting.ITEM_UPLOAD_INTERVAL)
 
         self.close()
 
@@ -146,7 +138,7 @@ class ItemBuffer(threading.Thread):
                 else:  # request-redis
                     requests.append(data)
 
-                if data_count >= UPLOAD_BATCH_MAX_SIZE:
+                if data_count >= setting.ITEM_UPLOAD_BATCH_MAX_SIZE:
                     self.__add_item_to_db(
                         items, update_items, requests, callbacks, items_fingerprints
                     )
@@ -243,9 +235,6 @@ class ItemBuffer(threading.Thread):
         return datas_dict
 
     def __export_to_db(self, table, datas, is_update=False, update_keys=()):
-        # 打点 校验
-        self.check_datas(table=table, datas=datas)
-
         for pipeline in self._pipelines:
             if is_update:
                 if table == self._task_table and not isinstance(
@@ -276,6 +265,7 @@ class ItemBuffer(threading.Thread):
                 )
                 return False
 
+        self.metric_datas(table=table, datas=datas)
         return True
 
     def __add_item_to_db(
@@ -328,7 +318,9 @@ class ItemBuffer(threading.Thread):
                 table, datas, is_update=True, update_keys=update_keys
             ):
                 export_success = False
-                failed_items["update"].append({"table": table, "datas": datas})
+                failed_items["update"].append(
+                    {"table": table, "datas": datas, "update_keys": update_keys}
+                )
 
         if export_success:
             # 执行回调
@@ -405,17 +397,19 @@ class ItemBuffer(threading.Thread):
 
         self._is_adding_to_db = False
 
-    def check_datas(self, table, datas):
+    def metric_datas(self, table, datas):
         """
         打点 记录总条数及每个key情况
         @param table: 表名
         @param datas: 数据 列表
         @return:
         """
-        metrics.emit_counter("total count", len(datas), classify=table)
+        total_count = 0
         for data in datas:
+            total_count += 1
             for k, v in data.items():
                 metrics.emit_counter(k, int(bool(v)), classify=table)
+        metrics.emit_counter("total count", total_count, classify=table)
 
     def close(self):
         # 调用pipeline的close方法

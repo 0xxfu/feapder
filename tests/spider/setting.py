@@ -22,8 +22,8 @@ COLLECTOR_SLEEP_TIME = 1 # 从任务队列中获取任务到内存队列的间�
 COLLECTOR_TASK_COUNT = 100 # 每次获取任务数量
 #
 # # SPIDER
-SPIDER_THREAD_COUNT = 1 # 爬虫并发数
-# SPIDER_SLEEP_TIME = 0 # 下载时间间隔（解析完一个response后休眠时间）
+SPIDER_THREAD_COUNT = 100 # 爬虫并发数
+SPIDER_SLEEP_TIME = 0 # 下载时间间隔（解析完一个response后休眠时间）
 # SPIDER_MAX_RETRY_TIMES = 100 # 每个请求最大重试次数
 
 # # 重新尝试失败的requests 当requests重试次数超过允许的最大重试次数算失败
@@ -67,3 +67,11 @@ SPIDER_THREAD_COUNT = 1 # 爬虫并发数
 # LOG_LEVEL = "DEBUG"
 # LOG_IS_WRITE_TO_FILE = False
 # OTHERS_LOG_LEVAL = "ERROR"  # 第三方库的log等级
+REQUEST_FILTER_ENABLE=True  # request 去重
+# REQUEST_FILTER_SETTING=dict(
+#     filter_type=3,  # 永久去重（BloomFilter） = 1 、内存去重（MemoryFilter） = 2、 临时去重（ExpireFilter）= 3、 轻量去重（LiteFilter）= 4
+#     expire_time=2592000,  # 过期时间1个月
+# ),
+REQUEST_FILTER_SETTING=dict(
+    filter_type=4,  # 永久去重（BloomFilter） = 1 、内存去重（MemoryFilter） = 2、 临时去重（ExpireFilter）= 3、 轻量去重（LiteFilter）= 4
+)

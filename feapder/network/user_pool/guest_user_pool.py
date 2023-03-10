@@ -16,7 +16,6 @@ from feapder import setting
 from feapder.db.redisdb import RedisDB
 from feapder.network.user_pool.base_user_pool import UserPoolInterface, GuestUser
 from feapder.utils.log import log
-from feapder.utils.redis_lock import RedisLock
 from feapder.utils.webdriver import WebDriver
 
 
@@ -125,11 +124,8 @@ class GuestUserPool(UserPoolInterface):
 
                 if not user_id and block:
                     self._keep_alive = False
-                    with RedisLock(
-                        key=self._tab_user_pool, lock_timeout=3600, wait_timeout=0
-                    ) as _lock:
-                        if _lock.locked:
-                            self.run()
+                    self._min_users = 1
+                    self.run()
                     continue
 
                 return user_str and GuestUser(**eval(user_str))

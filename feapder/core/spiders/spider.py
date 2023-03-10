@@ -96,7 +96,7 @@ class Spider(
         while True:
             try:
                 # 检查redis中是否有任务
-                tab_requests = setting.TAB_REQUSETS.format(redis_key=self._redis_key)
+                tab_requests = setting.TAB_REQUESTS.format(redis_key=self._redis_key)
                 todo_task_count = redisdb.zget_count(tab_requests)
 
                 if todo_task_count < self._min_task_count:  # 添加任务
@@ -160,13 +160,6 @@ class Spider(
         if self._is_distributed_task:  # 有任务时才提示启动爬虫
             # begin
             self.spider_begin()
-            self.record_spider_state(
-                spider_type=1,
-                state=0,
-                batch_date=tools.get_current_date(),
-                spider_start_time=tools.get_current_date(),
-                batch_interval=self._batch_interval,
-            )
 
             # 重置已经提示无任务状态为False
             self._is_show_not_task = False
@@ -191,16 +184,9 @@ class Spider(
 
         while True:
             try:
-                if self.all_thread_is_done():
+                if self._stop_spider or self.all_thread_is_done():
                     if not self._is_notify_end:
                         self.spider_end()  # 跑完一轮
-                        self.record_spider_state(
-                            spider_type=1,
-                            state=1,
-                            spider_end_time=tools.get_current_date(),
-                            batch_interval=self._batch_interval,
-                        )
-
                         self._is_notify_end = True
 
                     if not self._keep_alive:
@@ -230,12 +216,10 @@ class DebugSpider(Spider):
     """
 
     __debug_custom_setting__ = dict(
-        COLLECTOR_SLEEP_TIME=1,
         COLLECTOR_TASK_COUNT=1,
         # SPIDER
         SPIDER_THREAD_COUNT=1,
         SPIDER_SLEEP_TIME=0,
-        SPIDER_TASK_COUNT=1,
         SPIDER_MAX_RETRY_TIMES=10,
         REQUEST_LOST_TIMEOUT=600,  # 10分钟
         PROXY_ENABLE=False,
@@ -247,13 +231,15 @@ class DebugSpider(Spider):
         REQUEST_FILTER_ENABLE=False,
         OSS_UPLOAD_TABLES=(),
         DELETE_KEYS=True,
-        ITEM_PIPELINES=[CONSOLE_PIPELINE_PATH],
     )
 
-    def __init__(self, request=None, request_dict=None, *args, **kwargs):
+    def __init__(
+        self, request=None, request_dict=None, save_to_db=False, *args, **kwargs
+    ):
         """
         @param request: request 类对象
         @param request_dict: request 字典。 request 与 request_dict 二者选一即可
+        @param save_to_db: 数据是否入库 默认否
         @param kwargs:
         """
         warnings.warn(
@@ -264,6 +250,10 @@ class DebugSpider(Spider):
             raise Exception("request 与 request_dict 不能同时为null")
 
         kwargs["redis_key"] = kwargs["redis_key"] + "_debug"
+        if not save_to_db:
+            self.__class__.__debug_custom_setting__["ITEM_PIPELINES"] = [
+                CONSOLE_PIPELINE_PATH
+            ]
         self.__class__.__custom_setting__.update(
             self.__class__.__debug_custom_setting__
         )
@@ -274,22 +264,6 @@ class DebugSpider(Spider):
 
     def save_cached(self, request, response, table):
         pass
-
-    def delete_tables(self, delete_tables_list):
-        if isinstance(delete_tables_list, bool):
-            delete_tables_list = [self._redis_key + "*"]
-        elif not isinstance(delete_tables_list, (list, tuple)):
-            delete_tables_list = [delete_tables_list]
-
-        redis = RedisDB()
-        for delete_tab in delete_tables_list:
-            if delete_tab == "*":
-                delete_tab = self._redis_key + "*"
-
-            tables = redis.getkeys(delete_tab)
-            for table in tables:
-                log.info("正在删除表 %s" % table)
-                redis.clear(table)
 
     def __start_requests(self):
         yield self._request
@@ -333,13 +307,6 @@ class DebugSpider(Spider):
         if self._is_distributed_task:  # 有任务时才提示启动爬虫
             # begin
             self.spider_begin()
-            self.record_spider_state(
-                spider_type=1,
-                state=0,
-                batch_date=tools.get_current_date(),
-                spider_start_time=tools.get_current_date(),
-                batch_interval=self._batch_interval,
-            )
 
             # 重置已经提示无任务状态为False
             self._is_show_not_task = False
@@ -352,17 +319,6 @@ class DebugSpider(Spider):
             # self.send_msg(msg)
 
             self._is_show_not_task = True
-
-    def record_spider_state(
-        self,
-        spider_type,
-        state,
-        batch_date=None,
-        spider_start_time=None,
-        spider_end_time=None,
-        batch_interval=None,
-    ):
-        pass
 
     def _start(self):
         # 启动parser 的 start_requests

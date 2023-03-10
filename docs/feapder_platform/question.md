@@ -52,12 +52,14 @@ INFLUXDB_PORT_UDP=8089
 1. 查看后端日志，观察报错
     1. 若是docker版本问题，参考部署一节安装最新版本，
     2. 若是报 `This node is not a swarm manager`，则是部署环境没准备好，执行`docker swarm init`，可参考参考部署一节
-2. 查看镜像`docker images`，若不存在爬虫镜像`registry.cn-hangzhou.aliyuncs.com/feapderd/feapder`，可能自动拉取失败了，可手动拉取，拉取命令：`docker pull registry.cn-hangzhou.aliyuncs.com/feapderd/feapder:版本号`，版本号在`.env`里查看
-3. 重启docker服务，Centos对应的命令为：`service docker restart`，其他自行查资料
+2. 查看worker状态：
+    ```
+    docker service ps task_任务id --no-trunc
+    ```
+    看看error信息
 
-## 提示运行成功，但无任务实例
-
-查看不到任务实例的原因可能是服务端内网地址配置错误了，爬虫实例没注册进来。可通过常用命令里的查看爬虫日志看具体问题
+4. 查看镜像`docker images`，若不存在爬虫镜像`registry.cn-hangzhou.aliyuncs.com/feapderd/feapder`，可能自动拉取失败了，可手动拉取，拉取命令：`docker pull registry.cn-hangzhou.aliyuncs.com/feapderd/feapder:版本号`，版本号在`.env`里查看
+5. 重启docker服务，Centos对应的命令为：`service docker restart`，其他自行查资料
 
 ## 依赖包安装失败，可手动安装包
 
@@ -75,4 +77,49 @@ INFLUXDB_PORT_UDP=8089
     ![](http://markdown-media.oss-cn-beijing.aliyuncs.com/2021/09/17/16318842799082.jpg)
 2. 进入容器 `docker exec -it 容器ID bash`
 
-5. 接来下就和在centos服务器上操作一样了，你可以`pip`安装依赖
+3. 接来下就和在centos服务器上操作一样了，你可以`pip`安装依赖
+
+## 授权问题
+
+![](http://markdown-media.oss-cn-beijing.aliyuncs.com/2022/02/21/16454346779741.jpg)
+
+此问题为服务器时间和时区问题, 可以在服务器上输入 `date` ，命令检查时间及时区是否正确
+
+正常应该为 `Mon Feb 21 17:03:11 CST 2022` 注意是 CST 不是 UTC
+
+修改时区及矫正时间命令
+
+```
+# 改时区
+rm -f /etc/localtime
+ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+# 校对时间
+clock --hctosys
+```
+
+## 我搭建了个集群，如何让主节点不跑任务
+
+在主节点上执行下面命令，将其设置成drain状态即可
+
+    docker node update --availability drain 节点id
+ 
+ ## Network 问题
+
+attaching to network failed, make sure your network options are correct and check manager logs: context deadline exceeded
+ ![](http://markdown-media.oss-cn-beijing.aliyuncs.com/2023/02/16/16765140608308.jpg)
+
+1. 确定当前节点是不是Drain节点：docker node ls
+    
+    ![](http://markdown-media.oss-cn-beijing.aliyuncs.com/2023/02/16/16765145635622.jpg)
+    
+    是则继续往下看，不是则在评论区留言
+    
+1. 修复
+
+    ```
+    docker node update --availability active 节点id
+    docker node update --availability drain 节点id
+    ```    
+    
+原因是Drain节点，不能为其分配网络资源，需要先改成active，然后启动，之后在改回drain

@@ -8,6 +8,7 @@ Created on 2018-09-06 14:21
 @email: boris_liu@foxmail.com
 """
 import asyncio
+import base64
 import calendar
 import codecs
 import configparser  # 读配置文件的
@@ -15,11 +16,13 @@ import datetime
 import functools
 import hashlib
 import html
+import importlib
 import json
 import os
 import pickle
 import random
 import re
+import signal
 import socket
 import ssl
 import string
@@ -37,7 +40,6 @@ from pprint import pprint
 from urllib import request
 from urllib.parse import urljoin
 
-import execjs  # pip install PyExecJS
 import redis
 import requests
 import six
@@ -45,8 +47,14 @@ from requests.cookies import RequestsCookieJar
 from w3lib.url import canonicalize_url as _canonicalize_url
 
 import feapder.setting as setting
+from feapder.db.redisdb import RedisDB
 from feapder.utils.email_sender import EmailSender
 from feapder.utils.log import log
+
+try:
+    import execjs  # pip install PyExecJS
+except Exception as e:
+    pass
 
 os.environ["EXECJS_RUNTIME"] = "Node"  # 设置使用node执行js
 
@@ -62,14 +70,7 @@ redisdb = None
 def get_redisdb():
     global redisdb
     if not redisdb:
-        ip, port = setting.REDISDB_IP_PORTS.split(":")
-        redisdb = redis.Redis(
-            host=ip,
-            port=port,
-            db=setting.REDISDB_DB,
-            password=setting.REDISDB_USER_PASS,
-            decode_responses=True,
-        )  # redis默认端口是6379
+        redisdb = RedisDB()
     return redisdb
 
 
@@ -83,6 +84,23 @@ class Singleton(object):
         if self._cls not in self._instance:
             self._instance[self._cls] = self._cls(*args, **kwargs)
         return self._instance[self._cls]
+
+
+class LazyProperty:
+    """
+    属性延时初始化，且只初始化一次
+    """
+
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+        else:
+            value = self.func(instance)
+            setattr(instance, self.func.__name__, value)
+            return value
 
 
 def log_function_time(func):
@@ -138,6 +156,100 @@ def memoizemethod_noargs(method):
         return cache[self]
 
     return new_method
+
+
+def retry(retry_times=3, interval=0):
+    """
+    普通函数的重试装饰器
+    Args:
+        retry_times: 重试次数
+        interval: 每次重试之间的间隔
+
+    Returns:
+
+    """
+
+    def _retry(func):
+        @functools.wraps(func)  # 将函数的原来属性付给新函数
+        def wapper(*args, **kwargs):
+            for i in range(retry_times):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    log.error(
+                        "函数 {} 执行失败 重试 {} 次. error {}".format(func.__name__, i + 1, e)
+                    )
+                    time.sleep(interval)
+                    if i + 1 >= retry_times:
+                        raise e
+
+        return wapper
+
+    return _retry
+
+
+def retry_asyncio(retry_times=3, interval=0):
+    """
+    协程的重试装饰器
+    Args:
+        retry_times: 重试次数
+        interval: 每次重试之间的间隔
+
+    Returns:
+
+    """
+
+    def _retry(func):
+        @functools.wraps(func)  # 将函数的原来属性付给新函数
+        async def wapper(*args, **kwargs):
+            for i in range(retry_times):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    log.error(
+                        "函数 {} 执行失败 重试 {} 次. error {}".format(func.__name__, i + 1, e)
+                    )
+                    await asyncio.sleep(interval)
+                    if i + 1 >= retry_times:
+                        raise e
+
+        return wapper
+
+    return _retry
+
+
+def func_timeout(timeout):
+    """
+    函数运行时间限制装饰器
+    注: 不支持window
+    Args:
+        timeout: 超时的时间
+
+    Eg:
+        @set_timeout(3)
+        def test():
+            ...
+
+    Returns:
+
+    """
+
+    def wapper(func):
+        def handle(
+            signum, frame
+        ):  # 收到信号 SIGALRM 后的回调函数，第一个参数是信号的数字，第二个参数是the interrupted stack frame.
+            raise TimeoutError
+
+        def new_method(*args, **kwargs):
+            signal.signal(signal.SIGALRM, handle)  # 设置信号和回调函数
+            signal.alarm(timeout)  # 设置 timeout 秒的闹钟
+            r = func(*args, **kwargs)
+            signal.alarm(0)  # 关闭闹钟
+            return r
+
+        return new_method
+
+    return wapper
 
 
 ########################【网页解析相关】###############################
@@ -395,12 +507,62 @@ def fit_url(urls, identis):
 
 
 def get_param(url, key):
-    params = url.split("?")[-1].split("&")
+    match = re.search(f"{key}=([^&]+)", url)
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_all_params(url):
+    """
+    >>> get_all_params("https://www.baidu.com/s?wd=feapder")
+    {'wd': 'feapder'}
+    """
+    params_json = {}
+    params = url.split("?", 1)[-1].split("&")
     for param in params:
         key_value = param.split("=", 1)
-        if key == key_value[0]:
-            return key_value[1]
-    return None
+        if len(key_value) == 2:
+            params_json[key_value[0]] = unquote_url(key_value[1])
+        else:
+            params_json[key_value[0]] = ""
+
+    return params_json
+
+
+def parse_url_params(url):
+    """
+    解析url参数
+    :param url:
+    :return:
+
+    >>> parse_url_params("https://www.baidu.com/s?wd=%E4%BD%A0%E5%A5%BD")
+    ('https://www.baidu.com/s', {'wd': '你好'})
+    >>> parse_url_params("wd=%E4%BD%A0%E5%A5%BD")
+    ('', {'wd': '你好'})
+    >>> parse_url_params("https://www.baidu.com/s?wd=%E4%BD%A0%E5%A5%BD&pn=10")
+    ('https://www.baidu.com/s', {'wd': '你好', 'pn': '10'})
+    >>> parse_url_params("wd=%E4%BD%A0%E5%A5%BD&pn=10")
+    ('', {'wd': '你好', 'pn': '10'})
+    >>> parse_url_params("https://www.baidu.com")
+    ('https://www.baidu.com', {})
+    >>> parse_url_params("https://www.spidertools.cn/#/")
+    ('https://www.spidertools.cn/#/', {})
+    """
+    root_url = ""
+    params = {}
+    if "?" not in url:
+        if re.search("[&=]", url) and not re.search("/", url):
+            # 只有参数
+            params = get_all_params(url)
+        else:
+            root_url = url
+
+    else:
+        root_url = url.split("?", 1)[0]
+        params = get_all_params(url)
+
+    return root_url, params
 
 
 def urlencode(params):
@@ -429,7 +591,7 @@ def urldecode(url):
     params_json = {}
     params = url.split("?")[-1].split("&")
     for param in params:
-        key, value = param.split("=")
+        key, value = param.split("=", 1)
         params_json[key] = unquote_url(value)
 
     return params_json
@@ -599,20 +761,8 @@ def get_form_data(form):
     return data
 
 
-# mac上不好使
-# def get_domain(url):
-#     domain = ''
-#     try:
-#         domain = get_tld(url)
-#     except Exception as e:
-#         log.debug(e)
-#     return domain
-
-
 def get_domain(url):
-    proto, rest = urllib.parse.splittype(url)
-    domain, rest = urllib.parse.splithost(rest)
-    return domain
+    return urllib.parse.urlparse(url).netloc
 
 
 def get_index_url(url):
@@ -635,6 +785,8 @@ def get_localhost_ip():
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
+    except:
+        ip = ""
     finally:
         if s:
             s.close()
@@ -711,36 +863,46 @@ def get_text(soup, *args):
         return ""
 
 
-def del_html_tag(content, except_line_break=False, save_img=False, white_replaced=""):
+def del_html_tag(content, save_line_break=True, save_p=False, save_img=False):
     """
     删除html标签
     @param content: html内容
-    @param except_line_break: 保留p标签
-    @param save_img: 保留图片
-    @param white_replaced: 空白符替换
+    @param save_p: 保留p标签
+    @param save_img: 保留图片标签
+    @param save_line_break: 保留\n换行
     @return:
     """
-    content = replace_str(content, "(?i)<script(.|\n)*?</script>")  # (?)忽略大小写
-    content = replace_str(content, "(?i)<style(.|\n)*?</style>")
-    content = replace_str(content, "<!--(.|\n)*?-->")
-    content = replace_str(
-        content, "(?!&[a-z]+=)&[a-z]+;?"
-    )  # 干掉&nbsp等无用的字符 但&xxx= 这种表示参数的除外
-    if except_line_break:
-        content = content.replace("</p>", "/p")
-        content = replace_str(content, "<[^p].*?>")
-        content = content.replace("/p", "</p>")
-        content = replace_str(content, "[ \f\r\t\v]")
+    if not content:
+        return content
+    # js
+    content = re.sub("(?i)<script(.|\n)*?</script>", "", content)  # (?)忽略大小写
+    # css
+    content = re.sub("(?i)<style(.|\n)*?</style>", "", content)  # (?)忽略大小写
+    # 注释
+    content = re.sub("<!--(.|\n)*?-->", "", content)
+    # 干掉&nbsp;等无用的字符 但&xxx= 这种表示参数的除外
+    content = re.sub("(?!&[a-z]+=)&[a-z]+;?", "", content)
 
+    if save_p and save_img:
+        content = re.sub("<(?!(p[ >]|/p>|img ))(.|\n)+?>", "", content)
+    elif save_p:
+        content = re.sub("<(?!(p[ >]|/p>))(.|\n)+?>", "", content)
     elif save_img:
-        content = replace_str(content, "(?!<img.+?>)<.+?>")  # 替换掉除图片外的其他标签
-        content = replace_str(content, "(?! +)\s+", "\n")  # 保留空格
-        content = content.strip()
-
+        content = re.sub("<(?!img )(.|\n)+?>", "", content)
+    elif save_line_break:
+        content = re.sub("<(?!/p>)(.|\n)+?>", "", content)
+        content = re.sub("</p>", "\n", content)
     else:
-        content = replace_str(content, "<(.|\n)*?>")
-        content = replace_str(content, "\s", white_replaced)
-        content = content.strip()
+        content = re.sub("<(.|\n)*?>", "", content)
+
+    if save_line_break:
+        # 把非换行符的空白符替换为一个空格
+        content = re.sub("[^\S\n]+", " ", content)
+        # 把多个换行符替换为一个换行符 如\n\n\n 或 \n \n \n 替换为\n
+        content = re.sub("(\n ?)+", "\n", content)
+    else:
+        content = re.sub("\s+", " ", content)
+    content = content.strip()
 
     return content
 
@@ -952,6 +1114,26 @@ def mkdir(path):
         pass
 
 
+def get_cache_path(filename, root_dir=None, local=False):
+    """
+    Args:
+        filename:
+        root_dir:
+        local: 是否存储到当前目录
+
+    Returns:
+
+    """
+    if root_dir is None:
+        if local:
+            root_dir = os.path.join(sys.path[0], ".cache")
+        else:
+            root_dir = os.path.join(os.path.expanduser("~"), ".feapder/cache")
+    file_path = f"{root_dir}{os.sep}{filename}"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    return f"{root_dir}{os.sep}{filename}"
+
+
 def write_file(filename, content, mode="w", encoding="utf-8"):
     """
     @summary: 写文件
@@ -992,10 +1174,10 @@ def read_file(filename, readlines=False, encoding="utf-8"):
 def get_oss_file_list(oss_handler, prefix, date_range_min, date_range_max=None):
     """
     获取文件列表
-    @param prefix: 路径前缀 如 data/car_service_line/yiche/yiche_serial_zongshu_info
+    @param prefix: 路径前缀 如 xxx/xxx
     @param date_range_min: 时间范围 最小值 日期分隔符为/ 如 2019/03/01 或 2019/03/01/00/00/00
     @param date_range_max: 时间范围 最大值 日期分隔符为/ 如 2019/03/01 或 2019/03/01/00/00/00
-    @return: 每个文件路径 如 html/e_commerce_service_line/alibaba/alibaba_shop_info/2019/03/22/15/53/15/8ca8b9e4-4c77-11e9-9dee-acde48001122.json.snappy
+    @return: 每个文件路径 如 html/xxx/xxx/2019/03/22/15/53/15/8ca8b9e4-4c77-11e9-9dee-acde48001122.json.snappy
     """
 
     # 计算时间范围
@@ -1204,8 +1386,6 @@ def compile_js(js_func):
     ctx = execjs.compile(js_func)
     return ctx.call
 
-
-###############################################
 
 #############################################
 
@@ -1748,28 +1928,10 @@ def get_sha1(*args):
     return sha1.hexdigest()  # 40位
 
 
-def get_base64(secret, message):
-    """
-    @summary: 数字证书签名算法是："HMAC-SHA256"
-              参考：https://www.jokecamp.com/blog/examples-of-creating-base64-hashes-using-hmac-sha256-in-different-languages/
-    ---------
-    @param secret: 秘钥
-    @param message: 消息
-    ---------
-    @result: 签名输出类型是："base64"
-    """
-
-    import hashlib
-    import hmac
-    import base64
-
-    message = bytes(message, "utf-8")
-    secret = bytes(secret, "utf-8")
-
-    signature = base64.b64encode(
-        hmac.new(secret, message, digestmod=hashlib.sha256).digest()
-    ).decode("utf8")
-    return signature
+def get_base64(data):
+    if data is None:
+        return data
+    return base64.b64encode(str(data).encode()).decode("utf8")
 
 
 def get_uuid(key1="", key2=""):
@@ -1903,7 +2065,7 @@ def get_method(obj, name):
         return None
 
 
-def witch_workspace(project_path):
+def switch_workspace(project_path):
     """
     @summary:
     ---------
@@ -2031,7 +2193,7 @@ def make_batch_sql(
     if not datas:
         return
 
-    keys = list(datas[0].keys())
+    keys = list(set([key for data in datas for key in data]))
     values_placeholder = ["%s"] * len(keys)
 
     values = []
@@ -2283,10 +2445,10 @@ def reach_freq_limit(rate_limit, *key):
     msg_md5 = get_md5(*key)
     key = "rate_limit:{}".format(msg_md5)
     try:
-        if get_redisdb().get(key):
+        if get_redisdb().strget(key):
             return True
 
-        get_redisdb().set(key, time.time(), ex=rate_limit)
+        get_redisdb().strset(key, time.time(), ex=rate_limit)
     except redis.exceptions.ConnectionError as e:
         # 使用内存做频率限制
         global freq_limit_record
@@ -2459,9 +2621,63 @@ def wechat_warning(
         return False
 
 
-def send_msg(msg, level="debug", message_prefix=""):
+def feishu_warning(message, message_prefix=None, rate_limit=None, url=None, user=None):
+    """
+
+    Args:
+        message:
+        message_prefix:
+        rate_limit:
+        url:
+        user: {"open_id":"ou_xxxxx", "name":"xxxx"} 或 [{"open_id":"ou_xxxxx", "name":"xxxx"}]
+
+    Returns:
+
+    """
+    # 为了加载最新的配置
+    rate_limit = rate_limit if rate_limit is not None else setting.WARNING_INTERVAL
+    url = url or setting.FEISHU_WARNING_URL
+    user = user or setting.FEISHU_WARNING_USER
+
+    if not all([url, message]):
+        return
+
+    if reach_freq_limit(rate_limit, url, user, message_prefix or message):
+        log.info("报警时间间隔过短，此次报警忽略。 内容 {}".format(message))
+        return
+
+    if isinstance(user, dict):
+        user = [user] if user else []
+
+    at = ""
+    if setting.FEISHU_WARNING_ALL:
+        at = '<at user_id="all">所有人</at>'
+    elif user:
+        at = " ".join(
+            [f'<at user_id="{u.get("open_id")}">{u.get("name")}</at>' for u in user]
+        )
+
+    data = {"msg_type": "text", "content": {"text": at + message}}
+    headers = {"Content-Type": "application/json"}
+
+    try:
+        response = requests.post(
+            url, headers=headers, data=json.dumps(data).encode("utf8")
+        )
+        result = response.json()
+        response.close()
+        if result.get("StatusCode") == 0:
+            return True
+        else:
+            raise Exception(result.get("msg"))
+    except Exception as e:
+        log.error("报警发送失败。 报警内容 {}, error: {}".format(message, e))
+        return False
+
+
+def send_msg(msg, level="DEBUG", message_prefix=""):
     if setting.WARNING_LEVEL == "ERROR":
-        if level != "error":
+        if level.upper() != "ERROR":
             return
 
     if setting.DINGDING_WARNING_URL:
@@ -2477,6 +2693,10 @@ def send_msg(msg, level="debug", message_prefix=""):
     if setting.WECHAT_WARNING_URL:
         keyword = "feapder报警系统\n"
         wechat_warning(keyword + msg, message_prefix=message_prefix)
+
+    if setting.FEISHU_WARNING_URL:
+        keyword = "feapder报警系统\n"
+        feishu_warning(keyword + msg, message_prefix=message_prefix)
 
 
 ###################
@@ -2558,3 +2778,9 @@ def ensure_float(n):
     if not n:
         return 0.0
     return float(n)
+
+
+def import_cls(cls_info):
+    module, class_name = cls_info.rsplit(".", 1)
+    cls = importlib.import_module(module).__getattribute__(class_name)
+    return cls

@@ -11,6 +11,7 @@
   * [使用前必读](usage/使用前必读.md)
   * [轻量爬虫-AirSpider](usage/AirSpider.md)
   * [分布式爬虫-Spider](usage/Spider.md)
+  * [任务爬虫-TaskSpider](usage/TaskSpider.md)
   * [批次爬虫-BatchSpider](usage/BatchSpider.md)
   * [爬虫集成](usage/爬虫集成.md)
 
@@ -19,7 +20,8 @@
   * [响应-Response](source_code/Response.md)
   * [代理使用说明](source_code/proxy.md)
   * [用户池说明](source_code/UserPool.md)
-  * [浏览器渲染](source_code/浏览器渲染.md)
+  * [浏览器渲染-Selenium](source_code/浏览器渲染-Selenium.md)
+  * [浏览器渲染-Playwright](source_code/浏览器渲染-Playwright)
   * [解析器-BaseParser](source_code/BaseParser.md)
   * [批次解析器-BatchParser](source_code/BatchParser.md)
   * [Spider进阶](source_code/Spider进阶.md)
@@ -46,3 +48,4 @@
   * [安装问题](question/安装问题.md)
   * [运行问题](question/运行问题.md)
   * [请求问题](question/请求问题.md)
+  * [setting不生效问题](question/setting不生效问题.md)

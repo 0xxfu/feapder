@@ -18,9 +18,6 @@ from better_exceptions import format_exception
 
 import feapder.setting as setting
 
-LOG_FORMAT = "%(threadName)s|%(asctime)s|%(filename)s|%(funcName)s|line:%(lineno)d|%(levelname)s| %(message)s"
-PRINT_EXCEPTION_DETAILS = True
-
 
 class InterceptHandler(logging.Handler):
     def emit(self, record):
@@ -135,8 +132,8 @@ def get_logger(
     logger = logging.getLogger(name)
     logger.setLevel(log_level)
 
-    formatter = logging.Formatter(LOG_FORMAT)
-    if PRINT_EXCEPTION_DETAILS:
+    formatter = logging.Formatter(setting.LOG_FORMAT)
+    if setting.PRINT_EXCEPTION_DETAILS:
         formatter.formatException = lambda exc_info: format_exception(*exc_info)
 
     # 定义一个RotatingFileHandler，最多备份5个日志文件，每个日志文件最大10M
@@ -216,9 +213,9 @@ STOP_LOGS = [
 ]
 
 # 关闭日志打印
+OTHERS_LOG_LEVAL = eval("logging." + setting.OTHERS_LOG_LEVAL)
 for STOP_LOG in STOP_LOGS:
-    log_level = eval("logging." + setting.OTHERS_LOG_LEVAL)
-    logging.getLogger(STOP_LOG).setLevel(log_level)
+    logging.getLogger(STOP_LOG).setLevel(OTHERS_LOG_LEVAL)
 
 # print(logging.Logger.manager.loggerDict) # 取使用debug模块的name
 

@@ -48,7 +48,7 @@ class MemoryBitArray(BitArray):
             import bitarray
         except Exception as e:
             raise Exception(
-                "需要安装feapder完整版\ncommand: pip install feapder[all]\n若安装出错，参考：https://boris.org.cn/feapder/#/question/%E5%AE%89%E8%A3%85%E9%97%AE%E9%A2%98"
+                "需要安装feapder完整版\ncommand: pip install feapder[all]\n若安装出错，参考：https://feapder.com/#/question/%E5%AE%89%E8%A3%85%E9%97%AE%E9%A2%98"
             )
 
         self.num_bits = num_bits
@@ -138,6 +138,6 @@ class RedisBitArray(BitArray):
         if count:
             return int(count)
         else:
-            count = self.redis_db.bitcount(self.name)
+            count = self.redis_db.bitcount(self.name)  # 被设置为 1 的比特位的数量
             self.redis_db.strset(self.count_cached_name, count, ex=1800)  # 半小时过期
             return count

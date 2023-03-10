@@ -91,7 +91,15 @@ class MysqlDB:
 
     @classmethod
     def from_url(cls, url, **kwargs):
-        # mysql://username:password@ip:port/db?charset=utf8mb4
+        """
+
+        Args:
+            url: mysql://username:password@ip:port/db?charset=utf8mb4
+            **kwargs:
+
+        Returns:
+
+        """
         url_parsed = parse.urlparse(url)
 
         db_type = url_parsed.scheme.strip()
@@ -137,8 +145,10 @@ class MysqlDB:
         return conn, cursor
 
     def close_connection(self, conn, cursor):
-        cursor.close()
-        conn.close()
+        if conn:
+            conn.close()
+        if cursor:
+            cursor.close()
 
     def size_of_connections(self):
         """
@@ -155,7 +165,7 @@ class MysqlDB:
         return len(self.connect_pool._idle_cache)
 
     @auto_retry
-    def find(self, sql, limit=0, to_json=False):
+    def find(self, sql, limit=0, to_json=False, conver_col=True):
         """
         @summary:
         无数据： 返回()
@@ -165,6 +175,7 @@ class MysqlDB:
         @param sql:
         @param limit:
         @param to_json 是否将查询结果转为json
+        @param conver_col 是否处理查询结果，如date类型转字符串，json字符串转成json。仅当to_json=True时生效
         ---------
         @result:
         """
@@ -199,10 +210,12 @@ class MysqlDB:
                     return col
 
             if limit == 1:
-                result = [convert(col) for col in result]
+                if conver_col:
+                    result = [convert(col) for col in result]
                 result = dict(zip(columns, result))
             else:
-                result = [[convert(col) for col in row] for row in result]
+                if conver_col:
+                    result = [[convert(col) for col in row] for row in result]
                 result = [dict(zip(columns, r)) for r in result]
 
         self.close_connection(conn, cursor)
@@ -220,6 +233,7 @@ class MysqlDB:
 
         """
         affect_count = None
+        conn, cursor = None, None
 
         try:
             conn, cursor = self.get_connection()
@@ -255,16 +269,18 @@ class MysqlDB:
         sql = make_insert_sql(table, data, **kwargs)
         return self.add(sql)
 
-    def add_batch(self, sql, datas: List[Dict]):
+    def add_batch(self, sql, datas: List[List]):
         """
         @summary: 批量添加数据
         ---------
-        @ param sql: insert ignore into (xxx,xxx) values (%s, %s, %s)
-        # param datas: 列表 [{}, {}, {}]
+        @ param sql: insert ignore into (xxx,xxx,xxx) values (%s, %s, %s)
+        @ param datas: 列表 [[v1,v2,v3], [v1,v2,v3]]
+                       列表里的值要和插入的key的顺序对应上
         ---------
         @result: 添加行数
         """
         affect_count = None
+        conn, cursor = None, None
 
         try:
             conn, cursor = self.get_connection()
@@ -299,11 +315,12 @@ class MysqlDB:
         return self.add_batch(sql, datas)
 
     def update(self, sql):
+        conn, cursor = None, None
+
         try:
             conn, cursor = self.get_connection()
             cursor.execute(sql)
             conn.commit()
-
         except Exception as e:
             log.error(
                 """
@@ -341,11 +358,11 @@ class MysqlDB:
         Returns: True / False
 
         """
+        conn, cursor = None, None
         try:
             conn, cursor = self.get_connection()
             cursor.execute(sql)
             conn.commit()
-
         except Exception as e:
             log.error(
                 """
@@ -361,11 +378,11 @@ class MysqlDB:
             self.close_connection(conn, cursor)
 
     def execute(self, sql):
+        conn, cursor = None, None
         try:
             conn, cursor = self.get_connection()
             cursor.execute(sql)
             conn.commit()
-
         except Exception as e:
             log.error(
                 """

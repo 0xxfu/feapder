@@ -65,24 +65,27 @@ class BaseParser(object):
 
         pass
 
-    def exception_request(self, request, response):
+    def exception_request(self, request, response, e):
         """
         @summary: 请求或者parser里解析出异常的request
         ---------
         @param request:
         @param response:
+        @param e: 异常
         ---------
         @result: request / callback / None (返回值必须可迭代)
         """
 
         pass
 
-    def failed_request(self, request, response):
+    def failed_request(self, request, response, e):
         """
         @summary: 超过最大重试次数的request
         可返回修改后的request  若不返回request，则将传进来的request直接人redis的failed表。否则将修改后的request入failed表
         ---------
         @param request:
+        @param response:
+        @param e: 异常
         ---------
         @result: request / item / callback / None (返回值必须可迭代)
         """
@@ -117,21 +120,12 @@ class BaseParser(object):
         pass
 
 
-class BatchParser(BaseParser):
-    """
-    @summary: 批次爬虫模版
-    ---------
-    """
-
-    def __init__(
-        self, task_table, batch_record_table, task_state, date_format, mysqldb=None
-    ):
+class TaskParser(BaseParser):
+    def __init__(self, task_table, task_state, mysqldb=None):
         self._mysqldb = mysqldb or MysqlDB()  # mysqldb
 
-        self._task_table = task_table  # mysql中的任务表
-        self._batch_record_table = batch_record_table  # mysql 中的批次记录表
         self._task_state = task_state  # mysql中任务表的state字段名
-        self._date_format = date_format  # 批次日期格式
+        self._task_table = task_table  # mysql中的任务表
 
     def add_task(self):
         """
@@ -173,6 +167,8 @@ class BatchParser(BaseParser):
         else:
             log.error("置任务%s状态失败  sql=%s" % (task_id, sql))
 
+    update_task = update_task_state
+
     def update_task_batch(self, task_id, state=1, **kwargs):
         """
         批量更新任务 多处调用，更新的字段必须一致
@@ -190,6 +186,22 @@ class BatchParser(BaseParser):
         update_item.name_underline = self._task_table + "_item"
 
         return update_item
+
+
+class BatchParser(TaskParser):
+    """
+    @summary: 批次爬虫模版
+    ---------
+    """
+
+    def __init__(
+        self, task_table, batch_record_table, task_state, date_format, mysqldb=None
+    ):
+        super(BatchParser, self).__init__(
+            task_table=task_table, task_state=task_state, mysqldb=mysqldb
+        )
+        self._batch_record_table = batch_record_table  # mysql 中的批次记录表
+        self._date_format = date_format  # 批次日期格式
 
     @property
     def batch_date(self):

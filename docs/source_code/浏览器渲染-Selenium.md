@@ -1,4 +1,4 @@
-# 浏览器渲染
+# 浏览器渲染-Selenium
 
 采集动态页面时（Ajax渲染的页面），常用的有两种方案。一种是找接口拼参数，这种方式比较复杂但效率高，需要一定的爬虫功底；另外一种是采用浏览器渲染的方式，直接获取源码，简单方便
 
@@ -31,6 +31,7 @@ WEBDRIVER = dict(
     render_time=0, # 渲染时长，即打开网页等待指定时间后再获取源码
     custom_argument=["--ignore-certificate-errors"],  # 自定义浏览器渲染参数
     xhr_url_regexes=None,  # 拦截xhr接口，支持正则，数组类型
+    auto_install_driver=False,  # 自动下载浏览器驱动 支持chrome 和 firefox
 )
 ```
 
@@ -75,16 +76,6 @@ def download_midware(self, request):
 ```python
 def download_midware(self, request):
     request.proxies = {
-        "http": "http://xxx.xxx.xxx.xxx:xxxx"
-    }
-    return request
-```
-
-或者
-
-```python
-def download_midware(self, request):
-    request.proxies = {
         "https": "https://xxx.xxx.xxx.xxx:xxxx"
     }
     return request
@@ -113,6 +104,21 @@ def download_midware(self, request):
     return request
 ```
 
+或者
+
+```python
+def download_midware(self, request):
+    request.cookies = [
+        {
+            "domain": "xxx",
+            "name": "xxx",
+            "value": "xxx",
+            "expirationDate": "xxx"
+        },
+    ]
+    return request
+```
+
 ## 操作浏览器对象
 
 通过 `response.browser` 获取浏览器对象
@@ -136,10 +142,10 @@ class TestRender(feapder.AirSpider):
         browser.find_element_by_id("su").click()
         time.sleep(5)
         print(browser.page_source)
-        
+
         # response也是可以正常使用的
         # response.xpath("//title")
-        
+
         # 若有滚动，可通过如下方式更新response，使其加载滚动后的内容
         # response.text = browser.page_source
 
@@ -197,6 +203,7 @@ print("返回内容", xhr_response.content)
 ![](http://markdown-media.oss-cn-beijing.aliyuncs.com/2021/12/30/16408610725756.jpg)
 
 代码：
+
 ```python
 import time
 
@@ -250,9 +257,19 @@ class TestRender(feapder.AirSpider):
 
 if __name__ == "__main__":
     TestRender().start()
-    
+
 ```
 
+## 驱动版本自动适配
+
+```python
+WEBDRIVER = dict(
+    ...
+    auto_install_driver=True
+)
+```
+
+即浏览器渲染相关配置 `auto_install_driver` 设置True，让其自动对比驱动版本，版本不符或驱动不存在时自动下载
 
 ## 关闭当前浏览器
 
